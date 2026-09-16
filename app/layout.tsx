@@ -17,7 +17,10 @@ const assetPathScript = `window.EXCALIDRAW_ASSET_PATH = "/excalidraw-assets/";`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // Browser extensions such as Dark Reader add their own attributes to
+    // <html> before React starts, which React reports as a mismatch. This
+    // tells React to ignore attribute differences on this one tag.
+    <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: assetPathScript }} />
       </head>
