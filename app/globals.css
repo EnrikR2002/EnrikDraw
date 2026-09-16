@@ -1,0 +1,210 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  color: #1b1b1f;
+  background: #fff;
+}
+
+body {
+  overflow: hidden;
+}
+
+a {
+  color: #4a47b1;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  padding: 5px 10px;
+  border: 1px solid #c9c9d2;
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+}
+
+button:hover:not(:disabled) {
+  background: #f1f1f5;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---------- Manager ---------- */
+
+.manage {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+  height: 100%;
+  overflow: auto;
+}
+
+.manage h1 {
+  font-size: 20px;
+  margin: 0 0 18px;
+}
+
+.manage table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 18px;
+}
+
+.manage th,
+.manage td {
+  text-align: left;
+  padding: 9px 10px 9px 0;
+  border-bottom: 1px solid #ececf1;
+  vertical-align: middle;
+}
+
+.manage th {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b6b76;
+}
+
+.manage td.actions {
+  white-space: nowrap;
+  text-align: right;
+  padding-right: 0;
+}
+
+.manage td.actions button,
+.manage td.actions a {
+  margin-left: 6px;
+}
+
+.manage .title-cell {
+  width: 100%;
+  font-weight: 500;
+}
+
+.manage .stamp {
+  white-space: nowrap;
+  color: #6b6b76;
+}
+
+.new-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.new-row input {
+  flex: 0 1 280px;
+  padding: 6px 9px;
+  border: 1px solid #c9c9d2;
+  border-radius: 6px;
+}
+
+.note {
+  color: #6b6b76;
+  margin: 10px 0 0;
+}
+
+.error-banner {
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  border: 1px solid #f0c0c0;
+  border-radius: 6px;
+  background: #fdf1f1;
+  color: #8c1f1f;
+}
+
+/* ---------- Editor ---------- */
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+.editor-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #ececf1;
+  background: #fafafc;
+}
+
+.editor-header .drawing-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-header .spacer {
+  flex: 1 1 auto;
+}
+
+.canvas-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+/*
+ * Excalidraw fills its parent, so the parent must always have a real size.
+ * Pinning the wrapper to all four edges guarantees that in both normal and
+ * embedded mode.
+ */
+.canvas-inner {
+  position: absolute;
+  inset: 0;
+}
+
+/* Embed mode: the canvas is the whole iframe. */
+.editor.embed {
+  height: 100dvh;
+}
+
+.status {
+  white-space: nowrap;
+  color: #6b6b76;
+}
+
+.status.error {
+  color: #a11b1b;
+  font-weight: 600;
+}
+
+.centred {
+  height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+}
+
+.centred h1 {
+  font-size: 17px;
+  margin: 0 0 8px;
+}
+
+.centred p {
+  margin: 0;
+  color: #6b6b76;
+}
