@@ -243,6 +243,12 @@ Token, for the editor:
 | `GET` | `/api/drawings/[id]?token=...` | Read one drawing. |
 | `PUT` | `/api/drawings/[id]?token=...` | Save the scene. Body: `{"scene":"..."}` |
 
+No authentication, for Vercel Cron:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/keep-alive` | Read one row, so Supabase does not pause the project. Returns `{"ok":true}`. |
+
 `/manage` reads the list straight from Supabase in a server component, so the
 page is right the moment it loads. `GET /api/manage/drawings` returns the same
 data and is handy from a terminal:
@@ -272,6 +278,17 @@ stricter sandbox where the page gets an opaque origin. That open policy costs
 nothing: the token in the URL is the only key, and these routes use no cookies
 and no sessions, so a caller from another site gains nothing it did not
 already have. The manager API is not open in this way.
+
+**Supabase pauses quiet free projects.** Supabase pauses a free project after
+a week of low database activity. While it is paused, every Notion embed shows
+"Could not reach the database". To prevent that, `vercel.json` has Vercel Cron
+call `/api/keep-alive` four times a day, and each call reads one row. The
+Hobby plan runs each cron job at most once a day, so the file lists four daily
+jobs at different hours. Supabase does not publish how much activity is
+enough, so this is not a guarantee. Supabase emails the owner about a week
+before it pauses a project. If that email still arrives, add more jobs to
+`vercel.json`. A paused project can be restored from the Supabase dashboard
+for up to a year.
 
 **Last updated times are UTC.** They are formatted on the server, so a server
 and a browser in different time zones cannot disagree.
