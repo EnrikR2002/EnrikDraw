@@ -33,16 +33,33 @@ async function launchOptions(): Promise<LaunchOptions> {
   return { executablePath: await bundledExecutable, args: chromium.args };
 }
 
+function failureReason(error: unknown) {
+  if (!(error instanceof Error)) return "unknown";
+  const missingLibrary = /error while loading shared libraries: (lib[\w.-]+\.so[\d.]*)/.exec(error.message)?.[1];
+  if (missingLibrary) return `missing ${missingLibrary}`;
+  const systemCode = /\b(ENOENT|EACCES|ENOEXEC|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)\b/.exec(error.message)?.[0];
+  if (systemCode) return systemCode;
+  if (/Cannot find (module|package)/.test(error.message)) return "module not found";
+  if (error.message.includes("The input directory")) return "browser package assets not found";
+  if (error.message.includes("Target page, context or browser has been closed")) return "browser closed";
+  if (error.message.includes("window.renderEnrikDraw is not a function")) return "renderer script did not load";
+  if (/timeout|timed out/i.test(error.message)) return "timeout";
+  return "unexpected error";
+}
+
 export async function renderPreview(scene: Scene): Promise<PreviewImage> {
   if (running >= 2) throw new DrawingProblem("preview_busy", "The preview renderer is busy. Retry in a moment.");
   running++;
   let browser: Browser | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let stage = "read renderer bundle";
   try {
-    const [{ chromium }, options, script] = await Promise.all([
-      import("playwright-core"), launchOptions(), readFile(rendererScript),
-    ]);
+    const script = await readFile(rendererScript);
+    stage = "resolve browser";
+    const [{ chromium }, options] = await Promise.all([import("playwright-core"), launchOptions()]);
+    stage = "launch browser";
     browser = await chromium.launch({ ...options, env: browserEnv(), headless: true, timeout: 12_000 });
+    stage = "open renderer page";
     const context = await browser.newContext({ serviceWorkers: "block" });
     // Every browser request is fulfilled locally or blocked. No drawing URL,
     // access token, user cookie or network connection is needed to render.
@@ -66,12 +83,13 @@ export async function renderPreview(scene: Scene): Promise<PreviewImage> {
     });
     const page = await context.newPage();
     await page.goto(rendererOrigin, { waitUntil: "load", timeout: 8_000 });
+    stage = "draw scene";
     return await Promise.race([
       page.evaluate((input) => window.renderEnrikDraw(input), scene),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Preview timed out")), 10_000); }),
     ]);
-  } catch {
-    console.error("[enrikdraw] preview renderer failed");
+  } catch (error) {
+    console.error("[enrikdraw] preview renderer failed", stage, failureReason(error));
     throw new DrawingProblem("preview_failed", "EnrikDraw could not render this preview. Try again, or inspect the scene geometry instead.");
   } finally {
     clearTimeout(timer);
