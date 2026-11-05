@@ -1,4 +1,4 @@
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { createMcpHandler } from "@modelcontextprotocol/server";
 import { agentScopes, mcpOrigin, oauthConfig } from "@/lib/agent-auth";
 import { makeMcpServer } from "@/lib/agent-mcp";
 
@@ -24,40 +24,14 @@ export async function POST(request: Request) {
     });
   }
 
-  const server = makeMcpServer(origin, permissions, oauth?.allowed ?? null);
-  const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true, maxRequestBodySize: 512_000 });
-  try {
-    await server.connect(transport);
-    let method: string | undefined;
-    const receive = transport.onmessage;
-    transport.onmessage = (message, extra) => {
-      if ("method" in message) {
-        method = ["initialize", "notifications/initialized", "tools/list", "resources/list", "resources/templates/list", "prompts/list", "ping", "tools/call"].includes(message.method)
-          ? message.method : "other";
-      }
-      receive?.(message, extra);
-    };
-    const response = await transport.handleRequest(request);
-    if (response.status >= 400 || (method && method !== "tools/call")) {
-      const version = request.headers.get("MCP-Protocol-Version");
-      const result = response.headers.get("Content-Type")?.includes("application/json")
-        ? await response.clone().json().catch(() => null) : null;
-      const rpcError = typeof result?.error?.code === "number" ? result.error.code : undefined;
-      const problem = typeof result?.error?.message === "string" && result.error.message.includes("Unsupported protocol version")
-        ? "unsupported protocol version" : undefined;
-      console.info("[enrikdraw] MCP discovery", JSON.stringify({
-        method, status: response.status, version: version && /^\d{4}-\d{2}-\d{2}$/.test(version) ? version : undefined,
-        negotiatedVersion: method === "initialize" ? result?.result?.protocolVersion : undefined,
-        tools: method === "tools/list" && Array.isArray(result?.result?.tools) ? result.result.tools.length : undefined,
-        rpcError, problem,
-      }));
-    }
-    const headers = new Headers(response.headers);
-    headers.set("Cache-Control", "no-store");
-    return new Response(response.body, { status: response.status, headers });
-  } finally {
-    await server.close();
-  }
+  const handler = createMcpHandler(() => makeMcpServer(origin, permissions, oauth?.allowed ?? null), {
+    legacy: "stateless",
+    maxRequestBodySize: 512_000,
+  });
+  const response = await handler.fetch(request);
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store");
+  return new Response(response.body, { status: response.status, headers });
 }
 
 // This stateless server has no notification stream or sessions to terminate.

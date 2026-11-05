@@ -9,7 +9,7 @@ const text = z.string().min(1).max(4000).regex(/\S/);
 const color = z.string().regex(/^(#[0-9a-fA-F]{6}|transparent)$/);
 const elementId = z.string().min(1).max(128);
 const newId = elementId.regex(/^[A-Za-z0-9_-]+$/);
-const points = z.array(z.tuple([coord, coord])).min(2).max(64)
+const points = z.array(z.array(coord).length(2)).min(2).max(64)
   .describe("Absolute canvas coordinates, starting at the first endpoint.");
 const style = {
   strokeColor: color.optional(),
@@ -36,7 +36,7 @@ const changesInput = z.strictObject({
   text: text.optional(), fontSize: z.number().min(8).max(144).optional(), points: points.optional(),
 });
 
-export const operationInput = z.discriminatedUnion("op", [
+export const operationInput = z.union([
   z.strictObject({ op: z.literal("add"), element: elementInput }),
   z.strictObject({ op: z.literal("update"), id: elementId, changes: changesInput }),
   z.strictObject({ op: z.literal("remove"), id: elementId }),

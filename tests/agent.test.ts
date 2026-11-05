@@ -18,11 +18,24 @@ const manager = `Basic ${Buffer.from("owner:owner-pass").toString("base64")}`;
 const headers = { "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
-function rpc(method: string, params: object = {}, credential: string | null = `Bearer ${write}`) {
+function rpc(method: string, params: object = {}, credential: string | null = `Bearer ${write}`, modern = false) {
+  const version = "2026-07-28";
   return mcp(new Request(`${origin}/mcp`, {
-    method: "POST", headers: { ...headers, ...(credential && { Authorization: credential }) },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    method: "POST", headers: { ...headers, ...(credential && { Authorization: credential }),
+      ...(modern && { "MCP-Protocol-Version": version, "Mcp-Method": method }) },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { ...params,
+      ...(modern && { _meta: {
+        "io.modelcontextprotocol/protocolVersion": version,
+        "io.modelcontextprotocol/clientCapabilities": {},
+      } }) } }),
   }));
+}
+
+async function rpcBody(response: Response) {
+  if (!response.headers.get("Content-Type")?.startsWith("text/event-stream")) return response.json();
+  const data = (await response.text()).split(/\r?\n/).find((line) => line.startsWith("data: "));
+  assert.ok(data, "Expected a JSON-RPC message in the event stream");
+  return JSON.parse(data.slice(6));
 }
 
 test("MCP, editor and manager use the same data and revision gate", async (t) => {
@@ -75,7 +88,7 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
   assert.equal(metadata.resource, `${origin}/mcp`);
   assert.deepEqual(metadata.scopes_supported, ["drawings:read", "drawings:write"]);
   assert.equal((await rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } })).status, 200);
-  const list = await (await rpc("tools/list")).json();
+  const list = await rpcBody(await rpc("tools/list"));
   assert.equal(list.result.tools.length, 7);
 
   const jwt = (sub: string, aud = `${origin}/mcp`, azp = "chatgpt-client", exp: string | number = "5m", scope = "drawings:read") =>
@@ -86,12 +99,22 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
     await jwt("owner-sub", `${origin}/mcp`, "chatgpt-client", "5m", "drawings:delete")]) {
     assert.equal((await rpc("tools/list", {}, `Bearer ${token}`)).status, 401);
   }
-  assert.equal((await rpc("tools/list", {}, `Bearer ${await jwt("owner-sub")}`)).status, 200);
+  const ownerBearer = `Bearer ${await jwt("owner-sub")}`;
+  assert.equal((await rpc("tools/list", {}, ownerBearer)).status, 200);
+  assert.equal((await rpc("server/discover", {}, null, true)).status, 401);
+  const discovery = await rpc("server/discover", {}, ownerBearer, true);
+  assert.equal(discovery.status, 200);
+  assert.ok((await discovery.json()).result.capabilities.tools);
+  const modernList = await rpc("tools/list", {}, ownerBearer, true);
+  assert.equal(modernList.status, 200);
+  assert.deepEqual((await modernList.json()).result.tools.map(({ name }: { name: string }) => name), [
+    "enrikdraw_list_drawings", "enrikdraw_inspect_drawing", "enrikdraw_create_drawing", "enrikdraw_edit_drawing",
+  ]);
 
   const call = async (tool: string, args: object, token = write) => {
     const response = await rpc("tools/call", { name: `enrikdraw_${tool}`, arguments: args }, `Bearer ${token}`);
     assert.equal(response.status, 200);
-    const payload = await response.json();
+    const payload = await rpcBody(response);
     assert.ok(payload.result, JSON.stringify(payload));
     return payload.result.structuredContent;
   };
