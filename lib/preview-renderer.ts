@@ -3,7 +3,7 @@ import "server-only";
 import chromiumBinary from "@sparticuz/chromium";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Browser, LaunchOptions } from "playwright-core";
+import { chromium, type Browser, type LaunchOptions } from "playwright-core";
 import type { PreviewImage } from "../render/preview";
 import { DrawingProblem, type Scene } from "./scene";
 
@@ -38,6 +38,8 @@ function failureReason(error: unknown) {
   if (!(error instanceof Error)) return "unknown";
   const missingLibrary = /error while loading shared libraries: (lib[\w.-]+\.so[\d.]*)/.exec(error.message)?.[1];
   if (missingLibrary) return `missing ${missingLibrary}`;
+  const missingModule = /Cannot find (?:module|package) ['"]([\w@./-]{1,140})['"]/.exec(error.message)?.[1];
+  if (missingModule) return `missing module ${missingModule}`;
   const systemCode = /\b(ENOENT|EACCES|ENOEXEC|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)\b/.exec(error.message)?.[0];
   if (systemCode) return systemCode;
   if (/Cannot find (module|package)/.test(error.message)) return "module not found";
@@ -57,7 +59,7 @@ export async function renderPreview(scene: Scene): Promise<PreviewImage> {
   try {
     const script = await readFile(rendererScript);
     stage = "resolve browser";
-    const [{ chromium }, options] = await Promise.all([import("playwright-core"), launchOptions()]);
+    const options = await launchOptions();
     stage = "launch browser";
     browser = await chromium.launch({ ...options, env: browserEnv(), headless: true, timeout: 12_000 });
     stage = "open renderer page";

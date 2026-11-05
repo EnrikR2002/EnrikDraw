@@ -33,6 +33,7 @@ const nextConfig: NextConfig = {
       "./build/preview/renderer.js",
       "./node_modules/@excalidraw/excalidraw/dist/prod/fonts/**/*.woff2",
       "./node_modules/@sparticuz/chromium/bin/*.br",
+      "./node_modules/playwright-core/**/*",
     ],
   },
 
