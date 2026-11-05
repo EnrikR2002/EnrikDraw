@@ -14,15 +14,17 @@ const origin = "https://enrikdraw.example";
 const issuer = "https://issuer.example/";
 const write = `ed_${"A".repeat(43)}`;
 const read = `ed_${"B".repeat(43)}`;
+const writeOnly = `ed_${"C".repeat(43)}`;
 const manager = `Basic ${Buffer.from("owner:owner-pass").toString("base64")}`;
 const headers = { "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
-function rpc(method: string, params: object = {}, credential: string | null = `Bearer ${write}`, modern = false) {
+function rpc(method: string, params: Record<string, unknown> = {}, credential: string | null = `Bearer ${write}`, modern = false) {
   const version = "2026-07-28";
   return mcp(new Request(`${origin}/mcp`, {
     method: "POST", headers: { ...headers, ...(credential && { Authorization: credential }),
-      ...(modern && { "MCP-Protocol-Version": version, "Mcp-Method": method }) },
+      ...(modern && { "MCP-Protocol-Version": version, "Mcp-Method": method,
+        ...(typeof params.name === "string" && { "Mcp-Name": params.name }) }) },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { ...params,
       ...(modern && { _meta: {
         "io.modelcontextprotocol/protocolVersion": version,
@@ -74,6 +76,7 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
     ENRIKDRAW_AGENT_KEYS: JSON.stringify([
       { sha256: digest(write), scopes: ["drawings:read", "drawings:write", "drawings:delete", "notion:embed"] },
       { sha256: digest(read), scopes: ["drawings:read"] },
+      { sha256: digest(writeOnly), scopes: ["drawings:write"] },
     ]),
     ENRIKDRAW_OAUTH_ISSUER: issuer, ENRIKDRAW_OAUTH_JWKS_URL: `${issuer}jwks`,
     ENRIKDRAW_OAUTH_SUBJECT: "owner-sub", ENRIKDRAW_OAUTH_CLIENT_ID: "chatgpt-client",
@@ -89,7 +92,7 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
   assert.deepEqual(metadata.scopes_supported, ["drawings:read", "drawings:write"]);
   assert.equal((await rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } })).status, 200);
   const list = await rpcBody(await rpc("tools/list"));
-  assert.equal(list.result.tools.length, 7);
+  assert.equal(list.result.tools.length, 8);
 
   const jwt = (sub: string, aud = `${origin}/mcp`, azp = "chatgpt-client", exp: string | number = "5m", scope = "drawings:read") =>
     new SignJWT({ azp, scope }).setProtectedHeader({ alg: "RS256", kid: "test" })
@@ -108,16 +111,34 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
   const modernList = await rpc("tools/list", {}, ownerBearer, true);
   assert.equal(modernList.status, 200);
   assert.deepEqual((await modernList.json()).result.tools.map(({ name }: { name: string }) => name), [
-    "enrikdraw_list_drawings", "enrikdraw_inspect_drawing", "enrikdraw_create_drawing", "enrikdraw_edit_drawing",
+    "enrikdraw_list_drawings", "enrikdraw_inspect_drawing", "enrikdraw_preview_drawing",
+    "enrikdraw_create_drawing", "enrikdraw_edit_drawing",
   ]);
 
-  const call = async (tool: string, args: object, token = write) => {
-    const response = await rpc("tools/call", { name: `enrikdraw_${tool}`, arguments: args }, `Bearer ${token}`);
-    assert.equal(response.status, 200);
+  const callResult = async (tool: string, args: object, credential: string, modern = false) => {
+    const response = await rpc("tools/call", { name: `enrikdraw_${tool}`, arguments: args }, credential, modern);
+    if (response.status !== 200) assert.fail(`HTTP ${response.status}: ${await response.text()}`);
     const payload = await rpcBody(response);
     assert.ok(payload.result, JSON.stringify(payload));
-    return payload.result.structuredContent;
+    return payload.result;
   };
+  const call = async (tool: string, args: object, token = write) =>
+    (await callResult(tool, args, `Bearer ${token}`)).structuredContent;
+
+  async function preview(args: object) {
+    const result = await callResult("preview_drawing", args, ownerBearer, true);
+    assert.equal(result.isError, undefined, JSON.stringify(result.structuredContent));
+    const image = result.content.find((block: { type: string }) => block.type === "image");
+    assert.equal(image?.mimeType, "image/png");
+    const png = Buffer.from(image.data, "base64");
+    assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+    const { width, height } = result.structuredContent;
+    assert.equal(png.readUInt32BE(16), width);
+    assert.equal(png.readUInt32BE(20), height);
+    assert.ok(width > 100 && height > 100 && Math.max(width, height) <= 1440);
+    assert.ok(image.data.length <= 640_000);
+    return { details: result.structuredContent, png };
+  }
 
   const id = randomUUID();
   const input = { requestId: id, title: "Release flow", elements: [
@@ -125,6 +146,10 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
     { type: "text", id: "label", x: 20, y: 20, text: "Release" },
     { type: "arrow", id: "arrow", points: [[210, 40], [300, 40], [300, 100]] },
   ] };
+  assert.equal((await call("preview_drawing", { elements: input.elements }, writeOnly)).code, "insufficient_scope");
+  assert.equal((await call("preview_drawing", { id, elements: input.elements })).code, "invalid_preview");
+  assert.equal((await preview({ elements: input.elements })).details.mode, "new_draft");
+  assert.deepEqual((await call("list_drawings", {})).drawings, []);
   assert.equal((await call("create_drawing", input, read)).code, "insufficient_scope");
   const created = (await call("create_drawing", input)).drawing;
   assert.equal(created.id, id);
@@ -138,6 +163,20 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
   const token = new URL(created.embedUrl).searchParams.get("token");
   const editor = `${origin}/api/drawings/${id}?token=${token}`;
   const original = (await (await load(new Request(editor), context)).json()).drawing;
+  const saved = await preview({ id, revision: created.revision });
+  assert.equal(saved.details.revision, created.revision);
+  assert.equal(saved.details.mode, "saved_drawing");
+  assert.equal(saved.details.editorUrl, undefined);
+  assert.equal(saved.details.embedUrl, undefined);
+  const operations = [{ op: "update", id: "box", changes: { width: 540 } }];
+  assert.equal((await call("preview_drawing", { id, operations })).code, "invalid_preview");
+  assert.equal((await call("preview_drawing", { id, revision: randomUUID(), operations })).code, "revision_conflict");
+  const proposed = await preview({ id, revision: created.revision, operations });
+  assert.equal(proposed.details.mode, "proposed_edit");
+  assert.equal(proposed.details.revision, created.revision);
+  assert.ok(proposed.details.width > saved.details.width);
+  assert.notDeepEqual(proposed.png, saved.png);
+  assert.deepEqual((await (await load(new Request(editor), context)).json()).drawing, original);
   const invalidBatch = await call("edit_drawing", { id, revision: created.revision, operations: [
     { op: "remove", id: "arrow" }, { op: "remove", id: "absent" },
   ] });

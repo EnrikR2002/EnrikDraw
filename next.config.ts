@@ -27,6 +27,14 @@ const nextConfig: NextConfig = {
   // Pin the build root to this folder. Without it Turbopack walks up looking
   // for a lock file and can pick the wrong directory.
   turbopack: { root: path.resolve(process.cwd()) },
+  serverExternalPackages: ["@sparticuz/chromium", "playwright-core"],
+  outputFileTracingIncludes: {
+    "/mcp": [
+      "./build/preview/renderer.js",
+      "./node_modules/@excalidraw/excalidraw/dist/prod/fonts/**/*.woff2",
+      "./node_modules/@sparticuz/chromium/bin/*.br",
+    ],
+  },
 
   async headers() {
     return [

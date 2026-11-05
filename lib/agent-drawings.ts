@@ -65,9 +65,7 @@ export async function getDrawing(id: string, includeScene: boolean) {
 }
 
 export async function inspectDrawing(origin: string, id: string, offset: number, limit: number, revision: string | undefined, includeLinks: boolean) {
-  const row = await getDrawing(id, true);
-  if (revision) checkRevision(row, revision);
-  const scene = storedScene(row.scene ?? null);
+  const { row, scene } = await getDrawingSnapshot(id, revision);
   const elements = scene.elements.filter((element) => !element.isDeleted);
   // Bound the response for agent context windows. Omit binary and custom content.
   const summaries = [];
@@ -91,6 +89,12 @@ export async function inspectDrawing(origin: string, id: string, offset: number,
   };
   return { drawing, elements: summaries, totalElements: elements.length,
     nextOffset: offset + summaries.length < elements.length ? offset + summaries.length : null };
+}
+
+export async function getDrawingSnapshot(id: string, revision?: string) {
+  const row = await getDrawing(id, true);
+  if (revision) checkRevision(row, revision);
+  return { row, scene: storedScene(row.scene ?? null) };
 }
 
 export async function createDrawing(origin: string, input: z.infer<typeof createInput>) {

@@ -103,6 +103,32 @@ See [ChatGPT's custom MCP setup](https://developers.openai.com/api/docs/guides/c
 [OpenAI's OAuth documentation](https://developers.openai.com/plugins/build/auth),
 and [Auth0's ChatGPT walkthrough](https://auth0.com/blog/add-remote-mcp-server-chatgpt/).
 
+## Review a drawing visually
+
+If EnrikDraw is already connected in ChatGPT, open its settings and click
+**Refresh tools** once after deploying this feature. The preview uses the
+existing `drawings:read` permission. Try:
+
+> @EnrikDraw Draft a flowchart for our release process. Preview it, fix any
+> cramped labels or overlapping arrows, then save it and give me the editable link.
+
+`enrikdraw_preview_drawing` returns a PNG rendered by Excalidraw as an MCP
+image, plus small text metadata. Use `{ "elements": [...] }` for a new draft,
+`{ "id": "..." }` for a saved drawing, or
+`{ "id": "...", "revision": "...", "operations": [...] }` to try edits before
+saving. Proposed operations use the same format and revision checks as the
+edit tool. The preview does not save drafts, change revisions, or create a
+share link. A client that does not pass tool images to its model can still
+inspect the drawing's element geometry.
+
+The preview fits the whole drawing into a bounded image. It includes supported
+inline image files, but it does not load live web embeds or remote images.
+Vercel uses the packaged Chromium on Node.js 24; there is no preview service
+or API key to configure. For local development and tests on Windows, the
+renderer uses installed Microsoft Edge, and on macOS it uses Chrome. Set
+`ENRIKDRAW_PREVIEW_BROWSER` to the full path of a different installed
+Chromium executable if needed.
+
 ## Embed from one prompt
 
 For the built-in Notion tool, create a dedicated internal Notion connection
@@ -140,6 +166,7 @@ and [Notion's append endpoint](https://developers.notion.com/reference/patch-blo
 |---|---|---|
 | `enrikdraw_list_drawings` | `drawings:read` | Find existing drawings by title and ID. |
 | `enrikdraw_inspect_drawing` | `drawings:read` | Read the revision and element IDs, text, geometry and styling. Clients that also have `drawings:write` receive editable URLs. |
+| `enrikdraw_preview_drawing` | `drawings:read` | Render a saved drawing, an unsaved draft, or proposed edits as an image for visual review. |
 | `enrikdraw_create_drawing` | `drawings:write` | Create a native scene and return its permanent URLs. |
 | `enrikdraw_edit_drawing` | `drawings:write` | Rename or batch element additions, updates and removals against one revision. |
 | `enrikdraw_delete_drawing` | `drawings:delete` | Delete an exact drawing using its revision and title. |
