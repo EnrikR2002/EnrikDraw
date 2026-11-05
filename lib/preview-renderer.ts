@@ -1,4 +1,6 @@
 import "server-only";
+// A static import lets Next trace the launcher and its runtime dependencies.
+import chromiumBinary from "@sparticuz/chromium";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Browser, LaunchOptions } from "playwright-core";
@@ -24,13 +26,12 @@ async function launchOptions(): Promise<LaunchOptions> {
   if (override) return { executablePath: override };
   if (process.platform === "win32") return { channel: "msedge" };
   if (process.platform === "darwin") return { channel: "chrome" };
-  const { default: chromium } = await import("@sparticuz/chromium");
-  chromium.setGraphicsMode = false;
-  bundledExecutable ??= chromium.executablePath().catch((error: unknown) => {
+  chromiumBinary.setGraphicsMode = false;
+  bundledExecutable ??= chromiumBinary.executablePath().catch((error: unknown) => {
     bundledExecutable = undefined;
     throw error;
   });
-  return { executablePath: await bundledExecutable, args: chromium.args };
+  return { executablePath: await bundledExecutable, args: chromiumBinary.args };
 }
 
 function failureReason(error: unknown) {
