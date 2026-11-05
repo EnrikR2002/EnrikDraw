@@ -10,9 +10,13 @@ drawing, exporting and importing. EnrikDraw only adds:
 - autosave to Supabase Postgres
 - a private page to create, rename and delete drawings
 - headers that let Notion put the editor in an iframe
+- an optional authenticated MCP endpoint for creating and editing drawings with AI agents
 
 There are no folders, tags, search, thumbnails, sharing or version history.
 Notion organises the drawings; this app just stores them.
+
+See [Connect AI agents](docs/agents.md) for ChatGPT, Codex and Claude Code setup,
+tool examples and the one-prompt Notion workflow.
 
 ---
 
@@ -66,6 +70,11 @@ into Notion.
 4. Open **Project Settings → Data API**. Copy the **Project URL** into `SUPABASE_URL`.
 5. Open **Project Settings → API Keys**. Copy the **service_role** key into `SUPABASE_SERVICE_ROLE_KEY`.
 
+**Existing installs** can rerun the same SQL in place before deploying this
+version. It adds revision and deletion metadata to the existing table and
+preserves drawing IDs, scenes and access tokens. Reload open editor and manager
+tabs after the deploy so they send revisions with writes.
+
 The table has row level security switched on and no policies at all. That is
 deliberate. Every request goes through this app's server routes using the
 service role key, which ignores row level security. The public anon key can
@@ -108,6 +117,12 @@ Check lint:
 npm run lint
 ```
 
+The integration tests run against a disposable embedded Postgres database.
+
+```bash
+npm test
+```
+
 Build:
 
 ```bash
@@ -127,7 +142,7 @@ public CDN instead.
 1. Put this folder in a Git repository and push it to GitHub.
 2. Go to vercel.com/new and import the repository.
 3. Vercel detects Next.js. Leave the build settings alone.
-4. Open **Environment Variables** and add all six values from the table above.
+4. Open **Environment Variables** and add the required values from the table above.
    Tick **Production**, **Preview** and **Development** for each one. Leave
    `NEXT_PUBLIC_APP_URL` empty for now, because you do not know the address
    yet.
@@ -176,7 +191,7 @@ URLs. Nothing is stored in the database. That means:
 
 - a drawing id on its own cannot open anything
 - the server can always rebuild a drawing's URL from its id
-- deleting the drawing makes its URL dead
+- deleting the drawing disables its URL
 
 Every read and write of `/api/drawings/[id]` checks the token first, before
 touching the database, using a constant-time comparison.
@@ -215,13 +230,15 @@ Only one save is ever in flight. If you keep drawing while a save is running,
 the next save starts when that one finishes. An older save can therefore never
 land after, and overwrite, a newer one.
 
-A failed save leaves the canvas untouched and logs the reason to the browser
-console, without the token and without the drawing contents. The next edit
-tries again.
+A failed save leaves the canvas untouched. The next edit retries a connection
+failure. Each save includes the revision loaded by that editor and receives a
+new revision after it succeeds. Postgres checks the expected revision in the
+same write that saves the scene. If an agent or another tab changes the drawing,
+the editor shows a reload notice. An unsaved draft stays on the canvas and can
+be downloaded as an `.excalidraw` file before reloading.
 
-The editor also saves at once when the tab is hidden or closed. If the browser
-is killed inside the 900 ms window, that last change is lost. Last write wins.
-There is no multi-user syncing.
+The editor also tries to save when the tab is hidden or closed. Closing or
+killing the browser before the save completes can lose unsaved changes.
 
 ---
 
@@ -233,15 +250,19 @@ Basic Authentication, for the manager:
 |---|---|---|
 | `GET` | `/api/manage/drawings` | List drawings, with editor and embed URLs. |
 | `POST` | `/api/manage/drawings` | Create one. Body: `{"title":"..."}` |
-| `PATCH` | `/api/manage/drawings/[id]` | Rename. Body: `{"title":"..."}` |
-| `DELETE` | `/api/manage/drawings/[id]` | Delete. |
+| `PATCH` | `/api/manage/drawings/[id]` | Rename with `If-Match: "<revision>"`. Body `{"title":"..."}` |
+| `DELETE` | `/api/manage/drawings/[id]` | Delete with `If-Match: "<revision>"`. |
 
 Token, for the editor:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/drawings/[id]?token=...` | Read one drawing. |
-| `PUT` | `/api/drawings/[id]?token=...` | Save the scene. Body: `{"scene":"..."}` |
+| `GET` | `/api/drawings/[id]?token=...` | Read one drawing and its revision. Add `&metadata=1` to omit the scene. |
+| `PUT` | `/api/drawings/[id]?token=...` | Save the scene. Body `{"scene":"...","revision":"..."}` |
+
+Writes return `428` for a missing revision and `409` when it is stale.
+
+`POST /mcp` uses separate agent credentials. See [the MCP tool reference](docs/agents.md#tools).
 
 No authentication, for Vercel Cron:
 
@@ -293,5 +314,10 @@ for up to a year.
 **Last updated times are UTC.** They are formatted on the server, so a server
 and a browser in different time zones cannot disagree.
 
-**One user.** One username, one password, one secret. Anyone holding a drawing
-URL can edit that drawing. That is the point: it is how Notion renders it.
+**Recovering a deleted drawing.** Deletes hide the row and disable access through
+the app. The owner can restore an exact ID in the Supabase SQL Editor with
+`update public.drawings set deleted_at = null where id = '<drawing-uuid>' and deleted_at is not null;`.
+Its original embed URL works again. Archived rows count toward database storage.
+
+**Editable links.** Anyone holding a drawing URL can edit that drawing. Share
+the URL and any Notion page containing it only with its intended audience.

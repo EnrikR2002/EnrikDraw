@@ -6,8 +6,10 @@
  * cannot open anything.
  */
 import { NextResponse } from "next/server";
-import { supabase, type DrawingRow } from "@/lib/supabase";
+import { supabase } from "@/lib/supabase";
 import { isValidToken } from "@/lib/token";
+import { activeDrawings, MAX_SCENE_CHARS, updateDrawing, UUID } from "@/lib/drawing-store";
+import { readScene } from "@/lib/scene";
 
 export const dynamic = "force-dynamic";
 
@@ -24,9 +26,6 @@ const noStore = {
   "Cache-Control": "no-store",
   "Access-Control-Allow-Origin": "*",
 };
-/** Roughly 25 MB of JSON. Enough for a drawing with several pasted images. */
-const MAX_SCENE_CHARS = 25_000_000;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -63,11 +62,11 @@ export async function GET(request: Request, { params }: Context) {
   const denied = checkAccess(request, id);
   if (denied) return denied;
 
-  const { data, error } = await supabase()
-    .from("drawings")
-    .select("id, title, scene, updated_at")
-    .eq("id", id)
-    .maybeSingle();
+  const metadataOnly = new URL(request.url).searchParams.get("metadata") === "1";
+  const { data, error } = await (metadataOnly
+    ? activeDrawings()
+    : supabase().from("drawings").select("id, title, scene, updated_at, revision").is("deleted_at", null))
+    .eq("id", id).maybeSingle();
 
   if (error) {
     console.error("[enrikdraw] load drawing failed:", id, error.message);
@@ -77,8 +76,7 @@ export async function GET(request: Request, { params }: Context) {
     return NextResponse.json({ error: "not_found" }, { status: 404, headers: noStore });
   }
 
-  const row = data as Pick<DrawingRow, "id" | "title" | "scene" | "updated_at">;
-  return NextResponse.json({ drawing: row }, { headers: noStore });
+  return NextResponse.json({ drawing: data }, { headers: noStore });
 }
 
 export async function PUT(request: Request, { params }: Context) {
@@ -93,7 +91,10 @@ export async function PUT(request: Request, { params }: Context) {
     return NextResponse.json({ error: "bad_request" }, { status: 400, headers: noStore });
   }
 
-  const scene = (body as { scene?: unknown } | null)?.scene;
+  const { scene, revision } = (body ?? {}) as { scene?: unknown; revision?: unknown };
+  if (typeof revision !== "string" || !UUID.test(revision)) {
+    return NextResponse.json({ error: "revision_required" }, { status: 428, headers: noStore });
+  }
   if (typeof scene !== "string" || scene.length === 0) {
     return NextResponse.json({ error: "bad_request" }, { status: 400, headers: noStore });
   }
@@ -102,20 +103,21 @@ export async function PUT(request: Request, { params }: Context) {
     return NextResponse.json({ error: "too_large" }, { status: 413, headers: noStore });
   }
 
-  const { data, error } = await supabase()
-    .from("drawings")
-    .update({ scene, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select("id, updated_at")
-    .maybeSingle();
+  try {
+    readScene(scene);
+  } catch {
+    return NextResponse.json({ error: "invalid_scene" }, { status: 400, headers: noStore });
+  }
+
+  const { data, error } = await updateDrawing(id, revision, { scene });
 
   if (error) {
     console.error("[enrikdraw] save drawing failed:", id, error.message);
     return NextResponse.json({ error: "server_error" }, { status: 500, headers: noStore });
   }
   if (!data) {
-    return NextResponse.json({ error: "not_found" }, { status: 404, headers: noStore });
+    return NextResponse.json({ error: "revision_conflict" }, { status: 409, headers: noStore });
   }
 
-  return NextResponse.json({ ok: true, updated_at: data.updated_at }, { headers: noStore });
+  return NextResponse.json({ ok: true, updated_at: data.updated_at, revision: data.revision }, { headers: noStore });
 }

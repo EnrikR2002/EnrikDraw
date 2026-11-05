@@ -1,7 +1,7 @@
 /** Owner-only rename and delete for one drawing. */
 import { NextResponse } from "next/server";
 import { isOwnerRequest, unauthorized } from "@/lib/basic-auth";
-import { supabase } from "@/lib/supabase";
+import { updateDrawing, UUID } from "@/lib/drawing-store";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +9,23 @@ const MAX_TITLE_LENGTH = 200;
 const noStore = { "Cache-Control": "no-store" };
 
 type Context = { params: Promise<{ id: string }> };
+
+async function change(request: Request, id: string, changes: Parameters<typeof updateDrawing>[2]) {
+  const revision = request.headers.get("If-Match")?.match(/^"([^"]+)"$/)?.[1];
+  if (!revision || !UUID.test(revision) || !UUID.test(id)) {
+    return NextResponse.json({ error: "Reload the manager to get the drawing's revision." }, { status: 428, headers: noStore });
+  }
+
+  const { data, error } = await updateDrawing(id, revision, changes);
+  if (error) {
+    console.error("[enrikdraw] manager update failed:", error.code);
+    return NextResponse.json({ error: "Could not update the drawing." }, { status: 500, headers: noStore });
+  }
+  if (!data) {
+    return NextResponse.json({ error: "The drawing changed. Reload the manager and try again." }, { status: 409, headers: noStore });
+  }
+  return NextResponse.json(changes.deleted_at ? { ok: true } : { drawing: data }, { headers: noStore });
+}
 
 export async function PATCH(request: Request, { params }: Context) {
   if (!isOwnerRequest(request)) return unauthorized();
@@ -28,22 +45,7 @@ export async function PATCH(request: Request, { params }: Context) {
     return NextResponse.json({ error: "A title is required." }, { status: 400, headers: noStore });
   }
 
-  const { data, error } = await supabase()
-    .from("drawings")
-    .update({ title, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select("id, title, updated_at")
-    .maybeSingle();
-
-  if (error) {
-    console.error("[enrikdraw] rename drawing failed:", error.message);
-    return NextResponse.json({ error: "Could not rename the drawing." }, { status: 500, headers: noStore });
-  }
-  if (!data) {
-    return NextResponse.json({ error: "That drawing does not exist." }, { status: 404, headers: noStore });
-  }
-
-  return NextResponse.json({ drawing: data }, { headers: noStore });
+  return change(request, id, { title });
 }
 
 export async function DELETE(request: Request, { params }: Context) {
@@ -51,11 +53,5 @@ export async function DELETE(request: Request, { params }: Context) {
 
   const { id } = await params;
 
-  const { error } = await supabase().from("drawings").delete().eq("id", id);
-  if (error) {
-    console.error("[enrikdraw] delete drawing failed:", error.message);
-    return NextResponse.json({ error: "Could not delete the drawing." }, { status: 500, headers: noStore });
-  }
-
-  return NextResponse.json({ ok: true }, { headers: noStore });
+  return change(request, id, { deleted_at: new Date().toISOString() });
 }

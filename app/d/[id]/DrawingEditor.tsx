@@ -18,6 +18,7 @@ const STATUS_LABEL: Record<SaveStatus, string> = {
   saving: "Saving…",
   saved: "Saved",
   error: "Save failed",
+  stale: "Newer version available",
 };
 
 type Props = {
@@ -25,10 +26,11 @@ type Props = {
   title: string;
   token: string;
   initialScene: string | null;
+  initialRevision: string;
   embed: boolean;
 };
 
-export default function DrawingEditor({ id, title, token, initialScene, embed }: Props) {
+export default function DrawingEditor({ id, title, token, initialScene, initialRevision, embed }: Props) {
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [copied, setCopied] = useState(false);
 
@@ -71,6 +73,7 @@ export default function DrawingEditor({ id, title, token, initialScene, embed }:
             title={title}
             token={token}
             initialScene={initialScene}
+            initialRevision={initialRevision}
             onStatusChange={setStatus}
           />
         </div>

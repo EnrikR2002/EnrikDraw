@@ -26,3 +26,40 @@ create index if not exists drawings_updated_at_idx
 -- policies, the anon and authenticated keys can read and write nothing, so a
 -- leaked public key gives away no drawings.
 alter table public.drawings enable row level security;
+revoke all on public.drawings from anon, authenticated;
+grant select, insert, update, delete on public.drawings to service_role;
+
+-- Revisions cover editor, manager and agent writes, including archive/restore.
+-- Run this section on an existing install before deploying the new app.
+alter table public.drawings
+  add column if not exists revision uuid not null default gen_random_uuid(),
+  add column if not exists deleted_at timestamptz,
+  add column if not exists creation_fingerprint text;
+
+create or replace function public.bump_drawing_revision()
+returns trigger
+language plpgsql
+set search_path = pg_catalog
+as $$
+begin
+  new.revision := gen_random_uuid();
+  new.updated_at := clock_timestamp();
+  return new;
+end;
+$$;
+
+create or replace trigger drawings_revision_before_update
+  before update on public.drawings
+  for each row execute function public.bump_drawing_revision();
+
+-- A durable reservation keeps concurrent requests from appending twice.
+create table if not exists public.notion_embeds (
+  drawing_id uuid not null references public.drawings (id) on delete cascade,
+  page_id uuid not null,
+  block_id uuid,
+  created_at timestamptz not null default now(),
+  primary key (drawing_id, page_id)
+);
+alter table public.notion_embeds enable row level security;
+revoke all on public.notion_embeds from anon, authenticated;
+grant select, insert, update, delete on public.notion_embeds to service_role;

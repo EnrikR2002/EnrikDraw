@@ -7,6 +7,7 @@ import { createDrawing, deleteDrawing, renameDrawing } from "@/lib/client-api";
 export type DrawingItem = {
   id: string;
   title: string;
+  revision: string;
   /** Already formatted on the server, to keep server and browser in step. */
   updatedAt: string;
   editorUrl: string;
@@ -56,15 +57,15 @@ export default function ManageList({ drawings }: { drawings: DrawingItem[] }) {
   async function onRename(drawing: DrawingItem) {
     const title = window.prompt("New title", drawing.title);
     if (title === null || !title.trim()) return;
-    await run(() => renameDrawing(drawing.id, title.trim()));
+    await run(() => renameDrawing(drawing.id, drawing.revision, title.trim()));
   }
 
   async function onDelete(drawing: DrawingItem) {
     const confirmed = window.confirm(
-      `Delete "${drawing.title}"? This cannot be undone, and any Notion embed of it stops working.`,
+      `Delete "${drawing.title}"? Its editor and Notion links will stop working.`,
     );
     if (!confirmed) return;
-    await run(() => deleteDrawing(drawing.id));
+    await run(() => deleteDrawing(drawing.id, drawing.revision));
   }
 
   async function onCopyEmbed(drawing: DrawingItem) {

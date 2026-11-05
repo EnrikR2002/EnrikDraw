@@ -6,7 +6,7 @@
  * the browser, and then ask this page to render again.
  */
 import { headers } from "next/headers";
-import { supabase, type DrawingRow } from "@/lib/supabase";
+import { activeDrawings, type DrawingSummary } from "@/lib/drawing-store";
 import { editorUrl, embedUrl } from "@/lib/token";
 import { originFromHeaders } from "@/lib/origin";
 import ManageList, { type DrawingItem } from "./ManageList";
@@ -34,9 +34,7 @@ export default async function ManagePage() {
   const requestHeaders = await headers();
   const origin = originFromHeaders(requestHeaders);
 
-  const { data, error } = await supabase()
-    .from("drawings")
-    .select("id, title, created_at, updated_at")
+  const { data, error } = await activeDrawings()
     .order("updated_at", { ascending: false });
 
   if (error) {
@@ -52,10 +50,11 @@ export default async function ManagePage() {
     );
   }
 
-  const rows = (data ?? []) as Pick<DrawingRow, "id" | "title" | "created_at" | "updated_at">[];
+  const rows = (data ?? []) as DrawingSummary[];
   const drawings: DrawingItem[] = rows.map((row) => ({
     id: row.id,
     title: row.title,
+    revision: row.revision,
     updatedAt: formatStamp(row.updated_at),
     editorUrl: editorUrl(origin, row.id),
     embedUrl: embedUrl(origin, row.id),

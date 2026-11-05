@@ -10,6 +10,7 @@ type DrawingSummary = {
   title: string;
   created_at: string;
   updated_at: string;
+  revision: string;
   editorUrl: string;
   embedUrl: string;
 };
@@ -46,28 +47,48 @@ export function createDrawing(title: string) {
   });
 }
 
-export function renameDrawing(id: string, title: string) {
+export function renameDrawing(id: string, revision: string, title: string) {
   return call<{ drawing: { id: string; title: string; updated_at: string } }>(
     `/api/manage/drawings/${id}`,
-    { method: "PATCH", body: JSON.stringify({ title }) },
+    { method: "PATCH", headers: { "If-Match": `"${revision}"` }, body: JSON.stringify({ title }) },
   );
 }
 
-export function deleteDrawing(id: string) {
-  return call<{ ok: true }>(`/api/manage/drawings/${id}`, { method: "DELETE" });
+export function deleteDrawing(id: string, revision: string) {
+  return call<{ ok: true }>(`/api/manage/drawings/${id}`, {
+    method: "DELETE",
+    headers: { "If-Match": `"${revision}"` },
+  });
 }
 
-/** Saves a scene. Returns nothing useful; it throws when the save failed. */
-export async function saveScene(id: string, token: string, scene: string): Promise<void> {
-  const response = await fetch(`/api/drawings/${id}?token=${encodeURIComponent(token)}`, {
+function drawingApi(id: string, token: string) {
+  return `/api/drawings/${id}?token=${encodeURIComponent(token)}`;
+}
+
+export class StaleDrawing extends Error {}
+
+export async function fetchRevision(id: string, token: string, signal: AbortSignal) {
+  const response = await fetch(`${drawingApi(id, token)}&metadata=1`, { cache: "no-store", signal });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Revision check failed: HTTP ${response.status}`);
+  const { drawing } = await response.json() as { drawing: DrawingSummary };
+  return drawing.revision;
+}
+
+export async function saveScene(id: string, token: string, scene: string, revision: string) {
+  const body = JSON.stringify({ scene, revision });
+  const response = await fetch(drawingApi(id, token), {
     method: "PUT",
     cache: "no-store",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scene }),
+    body,
+    keepalive: body.length < 60_000 && new Blob([body]).size < 60_000,
   });
 
+  if ([404, 409, 428].includes(response.status)) throw new StaleDrawing();
   if (!response.ok) {
     // The token is in the URL, so never include the URL in the message.
     throw new Error(`Save failed: HTTP ${response.status}`);
   }
+  return (await response.json() as { revision: string }).revision;
 }

@@ -15,6 +15,9 @@ export type DrawingRow = {
   scene: string | null;
   created_at: string;
   updated_at: string;
+  revision: string;
+  deleted_at: string | null;
+  creation_fingerprint: string | null;
 };
 
 let cached: SupabaseClient | null = null;

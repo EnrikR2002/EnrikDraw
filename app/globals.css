@@ -175,6 +175,24 @@ button:disabled {
   inset: 0;
 }
 
+.drawing-conflict {
+  position: absolute;
+  z-index: 10;
+  bottom: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  border: 1px solid #e3c46e;
+  border-radius: 6px;
+  background: #fffae6;
+}
+
 /* Embed mode: the canvas is the whole iframe. */
 .editor.embed {
   height: 100dvh;

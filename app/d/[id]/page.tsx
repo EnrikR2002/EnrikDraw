@@ -6,12 +6,11 @@
  * exists.
  */
 import { supabase, type DrawingRow } from "@/lib/supabase";
+import { UUID } from "@/lib/drawing-store";
 import { isValidToken } from "@/lib/token";
 import DrawingEditor from "./DrawingEditor";
 
 export const dynamic = "force-dynamic";
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -51,8 +50,9 @@ export default async function DrawingPage({ params, searchParams }: Props) {
 
   const { data, error } = await supabase()
     .from("drawings")
-    .select("id, title, scene")
+    .select("id, title, scene, revision")
     .eq("id", id)
+    .is("deleted_at", null)
     .maybeSingle();
 
   if (error) {
@@ -74,7 +74,7 @@ export default async function DrawingPage({ params, searchParams }: Props) {
     );
   }
 
-  const drawing = data as Pick<DrawingRow, "id" | "title" | "scene">;
+  const drawing = data as Pick<DrawingRow, "id" | "title" | "scene" | "revision">;
 
   return (
     <DrawingEditor
@@ -83,6 +83,7 @@ export default async function DrawingPage({ params, searchParams }: Props) {
       // token is already in this page's URL, so passing it on adds no exposure.
       token={token as string}
       initialScene={drawing.scene}
+      initialRevision={drawing.revision}
       embed={isEmbed}
     />
   );

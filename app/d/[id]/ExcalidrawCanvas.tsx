@@ -9,7 +9,7 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type { OrderedExcalidrawElement } from "@excalidraw/excalidraw/element/types";
-import { saveScene } from "@/lib/client-api";
+import { fetchRevision, saveScene, StaleDrawing } from "@/lib/client-api";
 import type { SaveStatus } from "./types";
 
 /**
@@ -29,6 +29,7 @@ type Props = {
   title: string;
   token: string;
   initialScene: string | null;
+  initialRevision: string;
   onStatusChange: (status: SaveStatus) => void;
 };
 
@@ -51,6 +52,7 @@ export default function ExcalidrawCanvas({
   title,
   token,
   initialScene,
+  initialRevision,
   onStatusChange,
 }: Props) {
   // Computed once per document. A different drawing is a different component
@@ -77,7 +79,13 @@ export default function ExcalidrawCanvas({
   const seenHash = useRef<number | null>(initialHash);
   const timer = useRef<number | null>(null);
   const saving = useRef(false);
+  const revision = useRef(initialRevision);
+  const stale = useRef(false);
+  const reloading = useRef(false);
   const unmounted = useRef(false);
+  const [remoteChange, setRemoteChange] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null);
 
   const setStatus = useCallback(
@@ -87,10 +95,19 @@ export default function ExcalidrawCanvas({
     [onStatusChange],
   );
 
+  const markStale = useCallback(() => {
+    if (unmounted.current) return;
+    stale.current = true;
+    setRemoteChange(true);
+    setStatus("stale");
+  }, [setStatus]);
+
+  const hasDraft = useCallback(() => seenHash.current !== savedHash.current, []);
+
   const save = useCallback(async (): Promise<void> => {
     // Only ever one save in the air. This is what stops an older save from
     // landing after, and overwriting, a newer one.
-    if (saving.current) return;
+    if (saving.current || stale.current) return;
     saving.current = true;
 
     try {
@@ -117,8 +134,12 @@ export default function ExcalidrawCanvas({
         );
 
         try {
-          await saveScene(id, token, json);
+          revision.current = await saveScene(id, token, json, revision.current);
         } catch (error) {
+          if (error instanceof StaleDrawing) {
+            markStale();
+            break;
+          }
           // No token and no scene content in the log, just what went wrong.
           console.error("[enrikdraw] autosave failed for drawing", id, error);
           setStatus("error");
@@ -127,6 +148,7 @@ export default function ExcalidrawCanvas({
         }
 
         savedHash.current = hash;
+        if (!unmounted.current) setDirty(hasDraft());
         // A debounce is already queued, so let that fire instead of writing
         // again right now.
         if (timer.current !== null) break;
@@ -134,7 +156,7 @@ export default function ExcalidrawCanvas({
     } finally {
       saving.current = false;
     }
-  }, [id, token, setStatus]);
+  }, [id, token, setStatus, markStale, hasDraft]);
 
   const scheduleSave = useCallback(() => {
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -153,12 +175,80 @@ export default function ExcalidrawCanvas({
       const hash = hashElementsVersion(elements);
       if (hash === seenHash.current) return;
       seenHash.current = hash;
+      setDirty(hasDraft());
 
+      if (stale.current) {
+        setConfirmDiscard(false);
+        return;
+      }
       setStatus("saving");
       scheduleSave();
     },
-    [scheduleSave, setStatus],
+    [scheduleSave, setStatus, hasDraft],
   );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let checking = false;
+    const check = async () => {
+      if (checking || saving.current || stale.current || document.hidden) return;
+      checking = true;
+      const previous = revision.current;
+      try {
+        const current = await fetchRevision(id, token, controller.signal);
+        if (!controller.signal.aborted && !saving.current && revision.current === previous && current !== previous) {
+          markStale();
+        }
+      } catch {
+        // A failed poll leaves autosave responsible for reporting connection errors.
+      } finally {
+        checking = false;
+      }
+    };
+    const interval = window.setInterval(() => void check(), 15_000);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [id, token, markStale]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      if (reloading.current || !hasDraft()) return;
+      event.preventDefault();
+      event.returnValue = true;
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty, hasDraft]);
+
+  function downloadDraft() {
+    const snapshot = latest.current;
+    if (!snapshot) return;
+    const json = serializeAsJSON(snapshot.elements, snapshot.appState, snapshot.files, "local");
+    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${title} (local draft).excalidraw`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function reloadDrawing() {
+    if (hasDraft() && !confirmDiscard) {
+      setConfirmDiscard(true);
+      return;
+    }
+    reloading.current = true;
+    window.location.reload();
+  }
 
   // Frame the drawing once the canvas knows its real size.
   //
@@ -221,12 +311,26 @@ export default function ExcalidrawCanvas({
   }
 
   return (
-    <Excalidraw
-      initialData={initialData}
-      onChange={onChange}
-      excalidrawAPI={setApi}
-      // Used as the file name by Excalidraw's own export and save menus.
-      name={title}
-    />
+    <>
+      {remoteChange && (
+        <div className="drawing-conflict">
+          <span role="status">{dirty ? "Drawing changed elsewhere. Your draft is unsaved." : "Drawing changed elsewhere."}</span>
+          {dirty && <button type="button" onClick={downloadDraft}>Download draft</button>}
+          <button type="button" onClick={reloadDrawing}>
+            {dirty && confirmDiscard ? "Discard draft and reload" : "Reload drawing"}
+          </button>
+          {dirty && confirmDiscard && (
+            <button type="button" onClick={() => setConfirmDiscard(false)}>Cancel</button>
+          )}
+        </div>
+      )}
+      <Excalidraw
+        initialData={initialData}
+        onChange={onChange}
+        excalidrawAPI={setApi}
+        // Used as the file name by Excalidraw's own export and save menus.
+        name={title}
+      />
+    </>
   );
 }

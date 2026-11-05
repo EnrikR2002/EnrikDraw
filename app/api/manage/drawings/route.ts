@@ -6,7 +6,8 @@
  */
 import { NextResponse } from "next/server";
 import { isOwnerRequest, unauthorized } from "@/lib/basic-auth";
-import { supabase, type DrawingRow } from "@/lib/supabase";
+import { supabase } from "@/lib/supabase";
+import { activeDrawings, summaryColumns, type DrawingSummary } from "@/lib/drawing-store";
 import { editorUrl, embedUrl } from "@/lib/token";
 import { originFromHeaders } from "@/lib/origin";
 
@@ -23,9 +24,7 @@ function cleanTitle(raw: unknown): string {
 export async function GET(request: Request) {
   if (!isOwnerRequest(request)) return unauthorized();
 
-  const { data, error } = await supabase()
-    .from("drawings")
-    .select("id, title, created_at, updated_at")
+  const { data, error } = await activeDrawings()
     .order("updated_at", { ascending: false });
 
   if (error) {
@@ -34,7 +33,7 @@ export async function GET(request: Request) {
   }
 
   const origin = originFromHeaders(request.headers);
-  const drawings = (data as Pick<DrawingRow, "id" | "title" | "created_at" | "updated_at">[]).map(
+  const drawings = (data as DrawingSummary[]).map(
     (row) => ({
       ...row,
       editorUrl: editorUrl(origin, row.id),
@@ -61,7 +60,7 @@ export async function POST(request: Request) {
   const { data, error } = await supabase()
     .from("drawings")
     .insert({ title })
-    .select("id, title, created_at, updated_at")
+    .select(summaryColumns)
     .single();
 
   if (error || !data) {
