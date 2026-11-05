@@ -71,16 +71,19 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
   assert.equal(denied.status, 401);
   assert.match(denied.headers.get("WWW-Authenticate")!, /oauth-protected-resource/);
   assert.equal((await rpc("tools/list", {}, manager)).status, 401);
-  assert.equal((await oauthMetadata().json()).resource, `${origin}/mcp`);
+  const metadata = await oauthMetadata().json();
+  assert.equal(metadata.resource, `${origin}/mcp`);
+  assert.deepEqual(metadata.scopes_supported, ["drawings:read", "drawings:write"]);
   assert.equal((await rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } })).status, 200);
   const list = await (await rpc("tools/list")).json();
   assert.equal(list.result.tools.length, 7);
 
-  const jwt = (sub: string, aud = `${origin}/mcp`, azp = "chatgpt-client", exp: string | number = "5m") =>
-    new SignJWT({ azp, scope: "drawings:read" }).setProtectedHeader({ alg: "RS256", kid: "test" })
+  const jwt = (sub: string, aud = `${origin}/mcp`, azp = "chatgpt-client", exp: string | number = "5m", scope = "drawings:read") =>
+    new SignJWT({ azp, scope }).setProtectedHeader({ alg: "RS256", kid: "test" })
       .setIssuer(issuer).setAudience(aud).setSubject(sub).setIssuedAt().setExpirationTime(exp).sign(privateKey);
   for (const token of [await jwt("other"), await jwt("owner-sub", origin), await jwt("owner-sub", `${origin}/mcp`, "other-client"),
-    await jwt("owner-sub", `${origin}/mcp`, "chatgpt-client", 1)]) {
+    await jwt("owner-sub", `${origin}/mcp`, "chatgpt-client", 1),
+    await jwt("owner-sub", `${origin}/mcp`, "chatgpt-client", "5m", "drawings:delete")]) {
     assert.equal((await rpc("tools/list", {}, `Bearer ${token}`)).status, 401);
   }
   assert.equal((await rpc("tools/list", {}, `Bearer ${await jwt("owner-sub")}`)).status, 200);

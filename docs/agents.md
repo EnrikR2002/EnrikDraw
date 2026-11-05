@@ -90,6 +90,7 @@ server such as Auth0. EnrikDraw verifies access tokens as the resource server.
    | `ENRIKDRAW_OAUTH_JWKS_URL` | Provider's `jwks_uri` |
    | `ENRIKDRAW_OAUTH_SUBJECT` | Your account's exact immutable access-token `sub`, for example `auth0\|…` |
    | `ENRIKDRAW_OAUTH_CLIENT_ID` | Dedicated ChatGPT OAuth client ID |
+   | `ENRIKDRAW_OAUTH_SCOPES` | Optional space-separated permission ceiling. Defaults to `drawings:read drawings:write`. Add `drawings:delete` or `notion:embed` only if you want ChatGPT to use them. |
 
 4. In ChatGPT on the web, go to **Plugins → Add custom MCP server**. Name it
    **EnrikDraw**, enter the `/mcp` URL, choose **OAuth**, and supply the static

@@ -1,4 +1,4 @@
-import { mcpOrigin, oauthConfig, scopes } from "@/lib/agent-auth";
+import { mcpOrigin, oauthConfig } from "@/lib/agent-auth";
 import { notionConfig } from "@/lib/agent-notion";
 
 export function GET() {
@@ -11,6 +11,6 @@ export function GET() {
     resource_name: "EnrikDraw",
     authorization_servers: [oauth.issuer],
     bearer_methods_supported: ["header"],
-    scopes_supported: notionConfig() ? scopes : scopes.filter((scope) => scope !== "notion:embed"),
+    scopes_supported: notionConfig() ? oauth.allowed : oauth.allowed.filter((scope) => scope !== "notion:embed"),
   }, { headers });
 }

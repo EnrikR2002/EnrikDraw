@@ -5,6 +5,7 @@ import { z } from "zod";
 
 export const scopes = ["drawings:read", "drawings:write", "drawings:delete", "notion:embed"] as const;
 export type Scope = (typeof scopes)[number];
+const oauthScopes = z.array(z.enum(scopes)).min(1);
 
 const keyConfig = z.array(z.strictObject({
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -38,10 +39,11 @@ export function oauthConfig() {
       const url = new URL(value);
       if (url.protocol !== "https:" || url.username || url.password || url.hash || url.search) return null;
     }
+    const allowed = oauthScopes.parse((process.env.ENRIKDRAW_OAUTH_SCOPES ?? "drawings:read drawings:write").trim().split(/\s+/));
+    return { issuer, keys, subject, clientId, allowed: [...new Set(allowed)] };
   } catch {
     return null;
   }
-  return { issuer, keys, subject, clientId };
 }
 
 export async function agentScopes(request: Request, origin: string): Promise<Scope[] | null> {
@@ -72,7 +74,7 @@ export async function agentScopes(request: Request, origin: string): Promise<Sco
     });
     if ((payload.azp ?? payload.client_id) !== oauth.clientId || typeof payload.scope !== "string") return null;
     const granted = new Set(payload.scope.split(/\s+/));
-    const allowed = scopes.filter((scope) => granted.has(scope));
+    const allowed = oauth.allowed.filter((scope) => granted.has(scope));
     return allowed.length ? allowed : null;
   } catch {
     return null;

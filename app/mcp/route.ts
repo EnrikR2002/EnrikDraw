@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const requestOrigin = request.headers.get("Origin");
   if (requestOrigin && requestOrigin !== origin) return new Response(null, { status: 403, headers: noStore });
 
-  const oauth = Boolean(oauthConfig());
+  const oauth = oauthConfig();
   const permissions = await agentScopes(request, origin);
   if (!permissions) {
     const challenge = oauth
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     });
   }
 
-  const server = makeMcpServer(origin, permissions, oauth);
+  const server = makeMcpServer(origin, permissions, oauth?.allowed ?? null);
   const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true, maxRequestBodySize: 512_000 });
   try {
     await server.connect(transport);
