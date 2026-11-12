@@ -12,8 +12,16 @@ export async function fixture() {
   // A minimal PostgREST test adapter. Filtering and writes run on real Postgres.
   async function rest(request: Request) {
     const url = new URL(request.url);
+    if (url.pathname === "/rest/v1/rpc/stage_drawing_save_part" && request.method === "POST") {
+      const { p_drawing_id, p_revision, p_upload_id, p_part, p_chunk } = await request.json();
+      const { rows } = await db.query<{ result: string }>(
+        "select public.stage_drawing_save_part($1, $2, $3, $4, $5) as result",
+        [p_drawing_id, p_revision, p_upload_id, p_part, p_chunk],
+      );
+      return Response.json(rows[0].result);
+    }
     const table = url.pathname.slice("/rest/v1/".length);
-    if (!["drawings", "notion_embeds"].includes(table)) throw new Error("Unexpected fixture endpoint");
+    if (!["drawings", "notion_embeds", "drawing_save_parts"].includes(table)) throw new Error("Unexpected fixture endpoint");
     const identifier = (value: string) => {
       if (!/^[a-z_]+$/.test(value)) throw new Error(`Invalid fixture identifier: ${value}`);
       return `"${value}"`;
@@ -27,6 +35,8 @@ export async function fixture() {
       if (["select", "order", "offset", "limit"].includes(key)) continue;
       if (value === "is.null") filter.push(`${identifier(key)} is null`);
       else if (value.startsWith("eq.")) filter.push(`${identifier(key)} = ${bind(value.slice(3))}`);
+      else if (value.startsWith("gt.")) filter.push(`${identifier(key)} > ${bind(value.slice(3))}`);
+      else if (value.startsWith("lt.")) filter.push(`${identifier(key)} < ${bind(value.slice(3))}`);
       else throw new Error("Unexpected fixture filter");
     }
     const where = filter.length ? ` where ${filter.join(" and ")}` : "";
@@ -47,7 +57,8 @@ export async function fixture() {
     } else {
       const body = Object.entries(await request.json() as Record<string, unknown>);
       if (request.method === "POST") {
-        sql = `insert into public.${table} (${body.map(([key]) => identifier(key)).join(",")}) values (${body.map(([, value]) => bind(value)).join(",")})${returning}`;
+        const keys = body.map(([key]) => identifier(key));
+        sql = `insert into public.${table} (${keys.join(",")}) values (${body.map(([, value]) => bind(value)).join(",")})${returning}`;
       } else if (request.method === "PATCH") {
         sql = `update public.${table} set ${body.map(([key, value]) => `${identifier(key)} = ${bind(value)}`).join(",")}${where}${returning}`;
       } else throw new Error("Unexpected fixture method");

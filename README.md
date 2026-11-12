@@ -70,10 +70,9 @@ into Notion.
 4. Open **Project Settings → Data API**. Copy the **Project URL** into `SUPABASE_URL`.
 5. Open **Project Settings → API Keys**. Copy the **service_role** key into `SUPABASE_SERVICE_ROLE_KEY`.
 
-**Existing installs** can rerun the same SQL in place before deploying this
-version. It adds revision and deletion metadata to the existing table and
-preserves drawing IDs, scenes and access tokens. Reload open editor and manager
-tabs after the deploy so they send revisions with writes.
+**Existing installs** must rerun `supabase/schema.sql` before deploying this
+version. It adds temporary storage for large saves and preserves drawing IDs,
+scenes and access tokens. Reload open editor and manager tabs after deployment.
 
 The table has row level security switched on and no policies at all. That is
 deliberate. Every request goes through this app's server routes using the
@@ -210,30 +209,34 @@ Loading runs it back through Excalidraw's `restore()`, which drops temporary
 state and repairs anything written by an older version.
 
 Pasted images ride along inside that JSON, under `files`. There is no separate
-image pipeline. A drawing with many large images makes a large row. One save
-is capped at about 25 MB and returns a clear error above that.
+image pipeline. Autosave supports up to 25 MB per drawing, including encoded
+images. Large drawings upload in pieces and replace the saved drawing only
+after the whole upload succeeds. If your draft exceeds 25 MB, remove or
+replace large images to resume autosave, or choose **Download draft** to
+keep an `.excalidraw` copy.
 
 ### Autosave
 
 Excalidraw's `onChange` fires constantly, including for panning and selecting.
 So the editor does this:
 
-1. On every change, hash the elements with Excalidraw's `hashElementsVersion`.
-   If the hash is unchanged, do nothing. Panning and zooming never cause a
-   save.
+1. Check for changes to drawing elements or saved canvas settings, such as the
+   background color and grid. Panning and zooming do not trigger a save.
 2. If it changed, show **Saving...** and start a 900 ms timer. Each new change
    restarts the timer.
-3. When the timer fires, serialise the scene and `PUT` it.
+3. When the timer fires, serialize and upload the scene.
 4. Show **Saved**, or **Save failed**.
 
 Only one save is ever in flight. If you keep drawing while a save is running,
 the next save starts when that one finishes. An older save can therefore never
 land after, and overwrite, a newer one.
 
-A failed save leaves the canvas untouched. The next edit retries a connection
-failure. Each save includes the revision loaded by that editor and receives a
-new revision after it succeeds. Postgres checks the expected revision in the
-same write that saves the scene. If an agent or another tab changes the drawing,
+If a connection or server error interrupts a save, the canvas stays untouched
+and shows **Retry save** and **Download draft**, including in Notion embeds.
+The next edit also retries a connection failure. Each save includes the revision
+loaded by that editor and receives a new revision after it succeeds. Postgres
+checks the expected revision in the same write that saves the scene. If an
+agent or another tab changes the drawing,
 the editor shows a reload notice. An unsaved draft stays on the canvas and can
 be downloaded as an `.excalidraw` file before reloading.
 
@@ -261,6 +264,8 @@ Token, for the editor:
 | `PUT` | `/api/drawings/[id]?token=...` | Save the scene. Body `{"scene":"...","revision":"..."}` |
 
 Writes return `428` for a missing revision and `409` when it is stale.
+The browser automatically splits saves over 4 MB into numbered requests, then
+commits the completed upload against the same revision.
 
 `POST /mcp` uses separate agent credentials. See [the MCP tool reference](docs/agents.md#tools).
 
@@ -268,7 +273,7 @@ No authentication, for Vercel Cron:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/keep-alive` | Read one row, so Supabase does not pause the project. Returns `{"ok":true}`. |
+| `GET` | `/api/keep-alive` | Keep Supabase active and remove expired upload parts. Returns `{"ok":true}`. |
 
 `/manage` reads the list straight from Supabase in a server component, so the
 page is right the moment it loads. `GET /api/manage/drawings` returns the same
@@ -285,6 +290,9 @@ curl -u "$OWNER_USERNAME:$OWNER_PASSWORD" https://your-app.vercel.app/api/manage
 **Which sites may embed this app.** `next.config.ts` sends
 `Content-Security-Policy: frame-ancestors`, listing `'self'` plus the Notion
 domains: `notion.so`, `notion.site`, `notion.com` and their subdomains.
+Drawing pages also allow `notion://app.notion.com` and `notion://www.notion.so`
+for the Notion mobile app. Include those origins if you set `FRAME_ANCESTORS`
+and use Notion on mobile.
 `X-Frame-Options` is never sent, on purpose: it has no way to name an
 allow-list, so it would block Notion. If an embed ever shows a blank box, open
 the browser console on the Notion page. A `frame-ancestors` message names the
@@ -303,7 +311,8 @@ already have. The manager API is not open in this way.
 **Supabase pauses quiet free projects.** Supabase pauses a free project after
 a week of low database activity. While it is paused, every Notion embed shows
 "Could not reach the database". To prevent that, `vercel.json` has Vercel Cron
-call `/api/keep-alive` four times a day, and each call reads one row. The
+call `/api/keep-alive` four times a day. Each call reads one row and removes
+expired upload parts. The
 Hobby plan runs each cron job at most once a day, so the file lists four daily
 jobs at different hours. Supabase does not publish how much activity is
 enough, so this is not a guarantee. Supabase emails the owner about a week

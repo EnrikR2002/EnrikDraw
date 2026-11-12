@@ -1,4 +1,18 @@
+import type { AppState } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
+
+// Leave room below Vercel's 4.5 MB limit on each request.
+export const MAX_SAVE_REQUEST_BYTES = 4_000_000;
+export const MAX_SCENE_BYTES = 25_000_000;
+// A UTF-8 character can carry up to three bytes over from the previous slice.
+export const SAVE_PART_BYTES = MAX_SAVE_REQUEST_BYTES - 3;
+export const MAX_SAVE_PARTS = Math.ceil(MAX_SCENE_BYTES / SAVE_PART_BYTES);
+
+export function sceneSaveKey(elementHash: number, appState: Partial<AppState> | null | undefined) {
+  // These are the canvas settings Excalidraw includes in a local export.
+  return JSON.stringify([elementHash, appState?.viewBackgroundColor, appState?.gridSize,
+    appState?.gridStep, appState?.gridModeEnabled]);
+}
 
 export type Scene = {
   type: "excalidraw";

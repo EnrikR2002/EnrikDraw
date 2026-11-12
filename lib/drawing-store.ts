@@ -2,7 +2,6 @@ import "server-only";
 import { supabase, type DrawingRow } from "./supabase";
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const MAX_SCENE_CHARS = 25_000_000;
 export const summaryColumns = "id, title, created_at, updated_at, revision";
 export type DrawingSummary = Pick<DrawingRow, "id" | "title" | "created_at" | "updated_at" | "revision">;
 

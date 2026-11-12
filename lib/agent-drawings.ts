@@ -1,9 +1,9 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { activeDrawings, MAX_SCENE_CHARS, summaryColumns, updateDrawing, type DrawingSummary } from "./drawing-store";
+import { activeDrawings, summaryColumns, updateDrawing, type DrawingSummary } from "./drawing-store";
 import { elementInput, operationInput, editScene } from "./agent-elements";
-import { DrawingProblem, readScene } from "./scene";
+import { DrawingProblem, MAX_SCENE_BYTES, readScene } from "./scene";
 import { supabase, type DrawingRow } from "./supabase";
 import { editorUrl, embedUrl } from "./token";
 
@@ -33,7 +33,9 @@ function describeDrawing(row: DrawingSummary, origin: string) {
 
 function sceneString(scene: ReturnType<typeof readScene>) {
   const serialized = JSON.stringify(scene);
-  if (serialized.length > MAX_SCENE_CHARS) throw new DrawingProblem("scene_too_large", "The resulting scene exceeds the drawing size limit.");
+  if (Buffer.byteLength(serialized) > MAX_SCENE_BYTES) {
+    throw new DrawingProblem("scene_too_large", "The drawing exceeds the 25 MB save limit. Remove or replace large images in the editor.");
+  }
   return serialized;
 }
 

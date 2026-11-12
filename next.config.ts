@@ -23,6 +23,12 @@ const frameAncestors =
     "https://notion.com",
   ].join(" ");
 
+// Notion's native web view can use a notion:// origin. Notion's own
+// frame-ancestors policy lists both of these origins.
+const drawingFrameAncestors =
+  process.env.FRAME_ANCESTORS ??
+  `${frameAncestors} notion://app.notion.com notion://www.notion.so`;
+
 const nextConfig: NextConfig = {
   // Pin the build root to this folder. Without it Turbopack walks up looking
   // for a lock file and can pick the wrong directory.
@@ -49,6 +55,12 @@ const nextConfig: NextConfig = {
           // for an allow-list, and setting it would block Notion.
           { key: "Content-Security-Policy", value: `frame-ancestors ${frameAncestors};` },
           { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+      {
+        source: "/d/:id",
+        headers: [
+          { key: "Content-Security-Policy", value: `frame-ancestors ${drawingFrameAncestors};` },
         ],
       },
     ];

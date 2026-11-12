@@ -9,7 +9,8 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type { OrderedExcalidrawElement } from "@excalidraw/excalidraw/element/types";
-import { fetchRevision, saveScene, StaleDrawing } from "@/lib/client-api";
+import { DrawingTooLarge, fetchRevision, saveScene, StaleDrawing } from "@/lib/client-api";
+import { sceneSaveKey } from "@/lib/scene";
 import type { SaveStatus } from "./types";
 
 /**
@@ -30,6 +31,7 @@ type Props = {
   token: string;
   initialScene: string | null;
   initialRevision: string;
+  status: SaveStatus;
   onStatusChange: (status: SaveStatus) => void;
 };
 
@@ -53,6 +55,7 @@ export default function ExcalidrawCanvas({
   token,
   initialScene,
   initialRevision,
+  status,
   onStatusChange,
 }: Props) {
   // Computed once per document. A different drawing is a different component
@@ -66,24 +69,21 @@ export default function ExcalidrawCanvas({
     }
   }, [id, initialScene]);
 
-  const initialHash = useMemo(
-    () => (initialData ? hashElementsVersion(initialData.elements ?? []) : null),
+  const initialKey = useMemo(
+    () => (initialData ? sceneSaveKey(hashElementsVersion(initialData.elements ?? []), initialData.appState) : null),
     [initialData],
   );
 
   /** The most recent scene Excalidraw has told us about. */
   const latest = useRef<Snapshot | null>(null);
-  /** Element hash of what the database already holds. */
-  const savedHash = useRef<number | null>(initialHash);
-  /** Element hash of the last onChange we looked at. */
-  const seenHash = useRef<number | null>(initialHash);
+  const savedKey = useRef(initialKey);
+  const seenKey = useRef(initialKey);
   const timer = useRef<number | null>(null);
   const saving = useRef(false);
   const revision = useRef(initialRevision);
   const stale = useRef(false);
   const reloading = useRef(false);
   const unmounted = useRef(false);
-  const [remoteChange, setRemoteChange] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null);
@@ -98,11 +98,10 @@ export default function ExcalidrawCanvas({
   const markStale = useCallback(() => {
     if (unmounted.current) return;
     stale.current = true;
-    setRemoteChange(true);
     setStatus("stale");
   }, [setStatus]);
 
-  const hasDraft = useCallback(() => seenHash.current !== savedHash.current, []);
+  const hasDraft = useCallback(() => seenKey.current !== savedKey.current, []);
 
   const save = useCallback(async (): Promise<void> => {
     // Only ever one save in the air. This is what stops an older save from
@@ -117,8 +116,8 @@ export default function ExcalidrawCanvas({
         const snapshot = latest.current;
         if (!snapshot) break;
 
-        const hash = hashElementsVersion(snapshot.elements);
-        if (hash === savedHash.current) {
+        const key = sceneSaveKey(hashElementsVersion(snapshot.elements), snapshot.appState);
+        if (key === savedKey.current) {
           setStatus("saved");
           break;
         }
@@ -140,6 +139,10 @@ export default function ExcalidrawCanvas({
             markStale();
             break;
           }
+          if (error instanceof DrawingTooLarge) {
+            setStatus("too_large");
+            break;
+          }
           // No token and no scene content in the log, just what went wrong.
           console.error("[enrikdraw] autosave failed for drawing", id, error);
           setStatus("error");
@@ -147,7 +150,7 @@ export default function ExcalidrawCanvas({
           break;
         }
 
-        savedHash.current = hash;
+        savedKey.current = key;
         if (!unmounted.current) setDirty(hasDraft());
         // A debounce is already queued, so let that fire instead of writing
         // again right now.
@@ -171,10 +174,10 @@ export default function ExcalidrawCanvas({
       latest.current = { elements, appState, files };
 
       // Excalidraw also fires onChange for panning, zooming and selecting.
-      // Hashing the elements keeps those from causing a pointless save.
-      const hash = hashElementsVersion(elements);
-      if (hash === seenHash.current) return;
-      seenHash.current = hash;
+      // Compare only the elements and canvas settings that get saved.
+      const key = sceneSaveKey(hashElementsVersion(elements), appState);
+      if (key === seenKey.current) return;
+      seenKey.current = key;
       setDirty(hasDraft());
 
       if (stale.current) {
@@ -312,7 +315,7 @@ export default function ExcalidrawCanvas({
 
   return (
     <>
-      {remoteChange && (
+      {status === "stale" && (
         <div className="drawing-conflict">
           <span role="status">{dirty ? "Drawing changed elsewhere. Your draft is unsaved." : "Drawing changed elsewhere."}</span>
           {dirty && <button type="button" onClick={downloadDraft}>Download draft</button>}
@@ -322,6 +325,15 @@ export default function ExcalidrawCanvas({
           {dirty && confirmDiscard && (
             <button type="button" onClick={() => setConfirmDiscard(false)}>Cancel</button>
           )}
+        </div>
+      )}
+      {dirty && (status === "too_large" || status === "error") && (
+        <div className="drawing-conflict">
+          <span role="status">{status === "too_large"
+            ? "Draft exceeds the 25 MB save limit. Remove or replace large images to save."
+            : "Save failed. Your changes are still on the canvas."}</span>
+          {status === "error" && <button type="button" onClick={() => void save()}>Retry save</button>}
+          <button type="button" onClick={downloadDraft}>Download draft</button>
         </div>
       )}
       <Excalidraw

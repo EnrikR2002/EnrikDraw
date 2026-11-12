@@ -6,8 +6,11 @@ import { POST as mcp } from "../app/mcp/route";
 import { GET as oauthMetadata } from "../app/.well-known/oauth-protected-resource/mcp/route";
 import { GET as load, PUT as save } from "../app/api/drawings/[id]/route";
 import { DELETE as managerDelete } from "../app/api/manage/drawings/[id]/route";
+import { GET as keepAlive } from "../app/api/keep-alive/route";
 import { editScene, operationInput } from "../lib/agent-elements";
-import { readScene } from "../lib/scene";
+import { DrawingTooLarge, saveScene, StaleDrawing } from "../lib/client-api";
+import { MAX_SAVE_REQUEST_BYTES, MAX_SCENE_BYTES, readScene, sceneSaveKey } from "../lib/scene";
+import { deriveToken } from "../lib/token";
 import { fixture } from "./postgrest-fixture";
 
 const origin = "https://enrikdraw.example";
@@ -49,10 +52,17 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
   const jwk = { ...await exportJWK(publicKey), kid: "test", alg: "RS256" };
   let notionAppends = 0;
   let appendedUrl: string | undefined;
+  let interruptUpload = false;
   const restoreFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
-    const request = new Request(input, init);
+    const request = new Request(typeof input === "string" && input.startsWith("/") ? new URL(input, origin) : input, init);
     if (request.url.startsWith("https://db.example/rest/v1/")) return rest(request);
+    if (request.url.startsWith(`${origin}/api/drawings/`) && request.method === "PUT") {
+      const url = new URL(request.url);
+      assert.ok(Buffer.byteLength(await request.clone().text()) <= MAX_SAVE_REQUEST_BYTES);
+      if (interruptUpload && url.searchParams.get("part") === "1") return new Response(null, { status: 503 });
+      return save(request, { params: Promise.resolve({ id: url.pathname.split("/").at(-1)! }) });
+    }
     if (request.url === `${issuer}jwks`) return Response.json({ keys: [jwk] });
     if (request.url.startsWith(`https://api.notion.com/v1/blocks/${pageId}/children`)) {
       assert.equal(request.headers.get("Authorization"), "Bearer test-notion");
@@ -161,6 +171,7 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
 
   const context = { params: Promise.resolve({ id }) };
   const token = new URL(created.embedUrl).searchParams.get("token");
+  assert.ok(token);
   const editor = `${origin}/api/drawings/${id}?token=${token}`;
   const original = (await (await load(new Request(editor), context)).json()).drawing;
   const saved = await preview({ id, revision: created.revision });
@@ -186,6 +197,14 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
   const saveManually = (scene: string, revision: string) => save(new Request(editor, {
     method: "PUT", headers, body: JSON.stringify({ scene, revision }),
   }), context);
+  // A single HTTP request stays bounded, even when its character count is smaller.
+  const largeScene = JSON.stringify({ ...JSON.parse(original.scene), source: "界".repeat(1_500_000) });
+  assert.ok(largeScene.length < MAX_SAVE_REQUEST_BYTES);
+  const rejected = await saveManually(largeScene, created.revision);
+  assert.equal(rejected.status, 413);
+  assert.deepEqual(await rejected.json(), { error: "too_large" });
+  assert.deepEqual((await (await load(new Request(editor), context)).json()).drawing, original);
+
   const manualScene = JSON.stringify({ ...JSON.parse(original.scene), appState: { viewBackgroundColor: "#ffffff" }, files: { keep: { dataURL: "data:image/png;base64,AA==" } } });
   const [manual, agent] = await Promise.all([
     saveManually(manualScene, created.revision),
@@ -223,8 +242,69 @@ test("MCP, editor and manager use the same data and revision gate", async (t) =>
   assert.equal((await load(new Request(editor), context)).status, 404);
   assert.equal((await call("create_drawing", input)).code, "not_found");
   assert.equal((await call("list_drawings", {})).drawings.length, 0);
+
+  const largeId = randomUUID();
+  const { rows: [initial] } = await db.query<{ revision: string }>(
+    "insert into public.drawings (id, scene) values ($1, $2) returning revision", [largeId, original.scene]);
+  const largeToken = deriveToken(largeId);
+  const largeUrl = `${origin}/api/drawings/${largeId}?token=${largeToken}`;
+  const largeContext = { params: Promise.resolve({ id: largeId }) };
+  const readLarge = async () => (await (await load(new Request(largeUrl), largeContext)).json()).drawing;
+  interruptUpload = true;
+  await assert.rejects(saveScene(largeId, largeToken, largeScene, initial.revision), /HTTP 503/);
+  interruptUpload = false;
+  const staged = await db.query<{ upload_id: string }>("select upload_id from public.drawing_save_parts where drawing_id = $1", [largeId]);
+  assert.equal(staged.rows.length, 1);
+  const incomplete = await save(new Request(largeUrl, { method: "PUT", headers,
+    body: JSON.stringify({ revision: initial.revision, uploadId: staged.rows[0].upload_id, partCount: 2 }) }), largeContext);
+  assert.equal(incomplete.status, 422);
+  assert.equal((await readLarge()).revision, initial.revision);
+  assert.equal((await readLarge()).scene, original.scene);
+
+  const replacementUpload = randomUUID();
+  const replacementScene = JSON.stringify({ ...JSON.parse(original.scene), source: "replacement upload" });
+  const stagePart = (uploadId: string, part: number, body: string) => save(new Request(
+    `${largeUrl}&${new URLSearchParams({ uploadId, part: String(part), revision: initial.revision })}`,
+    { method: "PUT", body },
+  ), largeContext);
+  assert.equal((await stagePart(replacementUpload, 0, replacementScene.slice(0, 40))).status, 204);
+  assert.equal((await stagePart(staged.rows[0].upload_id, 1, "late part from the first upload")).status, 422);
+  assert.equal((await stagePart(replacementUpload, 1, replacementScene.slice(40))).status, 204);
+  const replacement = await save(new Request(largeUrl, { method: "PUT", headers,
+    body: JSON.stringify({ revision: initial.revision, uploadId: replacementUpload, partCount: 2 }) }), largeContext);
+  assert.equal(replacement.status, 200);
+  const { revision: replacementRevision } = await replacement.json();
+  assert.equal((await readLarge()).scene, replacementScene);
+
+  const nearLimitScene = JSON.stringify({ ...JSON.parse(original.scene), source: "界".repeat(8_330_000) });
+  const largeRevision = await saveScene(largeId, largeToken, nearLimitScene, replacementRevision);
+  const largeDrawing = await readLarge();
+  assert.equal(largeDrawing.scene, nearLimitScene);
+  assert.equal(largeDrawing.revision, largeRevision);
+  await assert.rejects(saveScene(largeId, largeToken, largeScene, initial.revision), StaleDrawing);
+  await assert.rejects(saveScene(largeId, largeToken, "x".repeat(MAX_SCENE_BYTES + 1), largeRevision), DrawingTooLarge);
+  assert.equal((await db.query("select part from public.drawing_save_parts where drawing_id = $1", [largeId])).rows.length, 0);
+
+  const largeEdit = await call("edit_drawing", { id: largeId, revision: largeRevision,
+    operations: [{ op: "update", id: "label", changes: { text: "Deploy" } }] });
+  assert.equal(largeEdit.drawing.id, largeId);
+  await db.query(`insert into public.drawing_save_parts (drawing_id, part, upload_id, revision, chunk, expires_at)
+    values ($1, 0, $2, $3, 'part', now() - interval '1 minute')`, [largeId, randomUUID(), largeRevision]);
+  assert.equal((await keepAlive()).status, 200);
+  assert.equal((await db.query("select part from public.drawing_save_parts where drawing_id = $1", [largeId])).rows.length, 0);
+
   await db.exec("set role anon;");
   await assert.rejects(db.query("select * from public.drawings"), /permission denied/);
+  await assert.rejects(db.query("select * from public.drawing_save_parts"), /permission denied/);
+  await assert.rejects(db.query("select public.stage_drawing_save_part(null, null, null, null, null)"), /permission denied/);
+});
+
+test("autosave detects canvas settings and ignores view-only changes", () => {
+  const appState = { viewBackgroundColor: "#ffffff", gridModeEnabled: false, scrollX: 0 };
+  const key = sceneSaveKey(42, appState);
+  assert.notEqual(sceneSaveKey(42, { ...appState, viewBackgroundColor: "#000000" }), key);
+  assert.notEqual(sceneSaveKey(42, { ...appState, gridModeEnabled: true }), key);
+  assert.equal(sceneSaveKey(42, { ...appState, scrollX: 20 }), key);
 });
 
 test("element edits validate geometry and preserve existing content on failure", () => {

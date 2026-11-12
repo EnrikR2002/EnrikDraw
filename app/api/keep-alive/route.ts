@@ -7,10 +7,8 @@
  * one row. The Hobby plan runs each cron job at most once a day, which is why
  * vercel.json lists four daily jobs instead of one.
  *
- * There is no authentication, on purpose. The route reads one id and answers
- * only {"ok":true} or {"ok":false}, so a caller learns nothing and changes
- * nothing. A CRON_SECRET check would add a setting that, if it went missing,
- * would make every run fail without anyone noticing.
+ * The same job removes expired temporary uploads. The route takes no input,
+ * touches no saved drawings and answers only whether maintenance succeeded.
  */
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
@@ -20,10 +18,14 @@ export const dynamic = "force-dynamic";
 const noStore = { "Cache-Control": "no-store" };
 
 export async function GET() {
-  const { error } = await supabase().from("drawings").select("id").limit(1);
+  const [activity, cleanup] = await Promise.all([
+    supabase().from("drawings").select("id").limit(1),
+    supabase().from("drawing_save_parts").delete().lt("expires_at", new Date().toISOString()),
+  ]);
+  const error = activity.error ?? cleanup.error;
 
   if (error) {
-    console.error("[enrikdraw] keep-alive read failed:", error.message);
+    console.error("[enrikdraw] database maintenance failed:", error.code);
     return NextResponse.json({ ok: false }, { status: 500, headers: noStore });
   }
 

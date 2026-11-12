@@ -19,6 +19,7 @@ const STATUS_LABEL: Record<SaveStatus, string> = {
   saved: "Saved",
   error: "Save failed",
   stale: "Newer version available",
+  too_large: "Drawing too large to save",
 };
 
 type Props = {
@@ -54,7 +55,7 @@ export default function DrawingEditor({ id, title, token, initialScene, initialR
         <header className="editor-header">
           <span className="drawing-title">{title}</span>
           <span className="spacer" />
-          <span className={status === "error" ? "status error" : "status"}>
+          <span className={status === "error" || status === "too_large" ? "status error" : "status"}>
             {STATUS_LABEL[status]}
           </span>
           <button type="button" onClick={() => void onCopyEmbed()}>
@@ -74,6 +75,7 @@ export default function DrawingEditor({ id, title, token, initialScene, initialR
             token={token}
             initialScene={initialScene}
             initialRevision={initialRevision}
+            status={status}
             onStatusChange={setStatus}
           />
         </div>
